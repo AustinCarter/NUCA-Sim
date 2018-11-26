@@ -1,4 +1,4 @@
-/* cache.c - cache module routines */
+/* nuca.c - cache module routines */
 
 /* SimpleScalar(TM) Tool Suite
  * Copyright (C) 1994-2003 by Todd M. Austin, Ph.D. and SimpleScalar, LLC.
@@ -56,7 +56,7 @@
 #include "host.h"
 #include "misc.h"
 #include "machine.h"
-#include "cache.h"
+#include "nuca.h"
 
 /* cache access macros */
 #define CACHE_TAG(cp, addr)	((addr) >> (cp)->tag_shift)
@@ -70,9 +70,9 @@
   (((tag) << (cp)->tag_shift)|((set) << (cp)->set_shift))
 
 /* index an array of cache blocks, non-trivial due to variable length blocks */
-#define CACHE_BINDEX(cp, blks, i)					\
-  ((struct cache_blk_t *)(((char *)(blks)) +				\
-			  (i)*(sizeof(struct cache_blk_t) +		\
+#define NUCA_CACHE_BINDEX(cp, blks, i)					\
+  ((struct nuca_cache_blk_t *)(((char *)(blks)) +				\
+			  (i)*(sizeof(struct nuca_cache_blk_t) +		\
 			       ((cp)->balloc				\
 				? (cp)->bsize*sizeof(byte_t) : 0))))
 
@@ -258,7 +258,7 @@ update_way_list(struct cache_set_t *set,	/* set contained way chain */
 
 /* create and initialize a general cache structure */
 struct cache_t *			/* pointer to cache created */
-cache_create(char *name,		/* name of the cache */
+nuca_cache_create(char *name,		/* name of the cache */
 	     int nsets,			/* total number of sets in cache */
 	     int bsize,			/* block (line) size of cache */
 	     int balloc,		/* allocate data space for blocks? */
@@ -270,15 +270,18 @@ cache_create(char *name,		/* name of the cache */
 					   md_addr_t baddr, int bsize,
 					   struct cache_blk_t *blk,
 					   tick_t now),
-	     unsigned int hit_latency)	/* latency in cycles for a hit */
+	     unsigned int hit_latency, /* latency in cycles for a hit */
+       unsigned int nbanks) /* number of banks */
 {
-  struct cache_t *cp;
+  struct nuca_cache_t *cp;
   struct cache_blk_t *blk;
   int i, j, bindex;
 
   /* check all cache parameters */
   if (nsets <= 0)
     fatal("cache size (in sets) `%d' must be non-zero", nsets);
+  if (nbanks <= 0)
+      fatal("number of banks `%d' must be non-zero", nbanks);
   if ((nsets & (nsets-1)) != 0)
     fatal("cache size (in sets) `%d' is not a power of two", nsets);
   /* blocks must be at least one datum large, i.e., 8 bytes for SS */
@@ -296,14 +299,15 @@ cache_create(char *name,		/* name of the cache */
     fatal("must specify miss/replacement functions");
 
   /* allocate the cache structure */
-  cp = (struct cache_t *)
-    calloc(1, sizeof(struct cache_t) + (nsets-1)*sizeof(struct cache_set_t));
+  cp = (struct nuca_cache_t *)
+    calloc(1, sizeof(struct nuca_cache_t) + (nbanks-1)*sizeof(struct nuca_cache_bank_t));
   if (!cp)
     fatal("out of virtual memory");
 
   /* initialize user parameters */
   cp->name = mystrdup(name);
   cp->nsets = nsets;
+  cp->nbanks = nbanks;
   cp->bsize = bsize;
   cp->balloc = balloc;
   cp->usize = usize;
@@ -343,9 +347,11 @@ cache_create(char *name,		/* name of the cache */
   cp->last_tagset = 0;
   cp->last_blk = NULL;
 
+  /* allocate sets */
+
   /* allocate data blocks */
-  cp->data = (byte_t *)calloc(nsets * assoc,
-			      sizeof(struct cache_blk_t) +
+  cp->data = (byte_t *)calloc(nbanks*nsets,
+			      sizeof(struct nuca_cache_blk_t) +
 			      (cp->balloc ? (bsize*sizeof(byte_t)) : 0));
   if (!cp->data)
     fatal("out of virtual memory");
@@ -353,28 +359,32 @@ cache_create(char *name,		/* name of the cache */
   /* slice up the data blocks */
   for (bindex=0,i=0; i<nsets; i++)
     {
-      cp->sets[i].way_head = NULL;
-      cp->sets[i].way_tail = NULL;
+      cp->banks[i].way_head = NULL;
+      cp->banks[i].way_tail = NULL;
       /* get a hash table, if needed */
       if (cp->hsize)
 	{
-	  cp->sets[i].hash =
-	    (struct cache_blk_t **)calloc(cp->hsize,
-					  sizeof(struct cache_blk_t *));
-	  if (!cp->sets[i].hash)
+	  cp->banks[i].hash =
+	    (struct nuca_cache_set_t **)calloc(nsets,
+					  sizeof(struct nuca_cache_set_t *));
+	  if (!cp->banks[i].hash)
 	    fatal("out of virtual memory");
 	}
       /* NOTE: all the blocks in a set *must* be allocated contiguously,
 	 otherwise, block accesses through SET->BLKS will fail (used
 	 during random replacement selection) */
-      cp->sets[i].blks = CACHE_BINDEX(cp, cp->data, bindex);
+      cp->banks[i].sets[i].hash = (struct cache_blk_t **)calloc(cp->hsize, sizeof(struct cache_blk_t *));
+	  if (!cp->banks[i].sets[i].hash)
+	    fatal("out of virtual memory");
+
+      NUCA_CACHE_BINDEX(cp, cp->data, bindex);
       
       /* link the data blocks into ordered way chain and hash table bucket
          chains, if hash table exists */
       for (j=0; j<assoc; j++)
 	{
 	  /* locate next cache block */
-	  blk = CACHE_BINDEX(cp, cp->data, bindex);
+	  blk = NUCA_CACHE_BINDEX(cp, cp->data, bindex);
 	  bindex++;
 
 	  /* invalidate new cache block */
@@ -403,7 +413,7 @@ cache_create(char *name,		/* name of the cache */
 
 /* parse policy */
 enum cache_policy			/* replacement policy enum */
-cache_char2policy(char c)		/* replacement policy as a char */
+nuca_cache_char2policy(char c)		/* replacement policy as a char */
 {
   switch (c) {
   case 'l': return LRU;
@@ -415,7 +425,7 @@ cache_char2policy(char c)		/* replacement policy as a char */
 
 /* print cache configuration */
 void
-cache_config(struct cache_t *cp,	/* cache instance */
+nuca_cache_config(struct cache_t *cp,	/* cache instance */
 	     FILE *stream)		/* output stream */
 {
   fprintf(stream,
@@ -432,7 +442,7 @@ cache_config(struct cache_t *cp,	/* cache instance */
 
 /* register cache stats */
 void
-cache_reg_stats(struct cache_t *cp,	/* cache instance */
+nuca_cache_reg_stats(struct cache_t *cp,	/* cache instance */
 		struct stat_sdb_t *sdb)	/* stats database */
 {
   char buf[512], buf1[512], *name;
@@ -475,7 +485,7 @@ cache_reg_stats(struct cache_t *cp,	/* cache instance */
 
 /* print cache stats */
 void
-cache_stats(struct cache_t *cp,		/* cache instance */
+nuca_cache_stats(struct cache_t *cp,		/* cache instance */
 	    FILE *stream)		/* output stream */
 {
   double sum = (double)(cp->hits + cp->misses);
@@ -497,7 +507,7 @@ cache_stats(struct cache_t *cp,		/* cache instance */
    cache blocks are not allocated (!CP->BALLOC), UDATA should be NULL if no
    user data is attached to blocks */
 unsigned int				/* latency of access in cycles */
-cache_access(struct cache_t *cp,	/* cache to access */
+nuca_cache_access(struct cache_t *cp,	/* cache to access */
 	     enum mem_cmd cmd,		/* access type, Read or Write */
 	     md_addr_t addr,		/* address of access */
 	     void *vp,			/* ptr to buffer for input/output */
@@ -578,7 +588,7 @@ cache_access(struct cache_t *cp,	/* cache to access */
   case Random:
     {
       int bindex = myrand() & (cp->assoc - 1);
-      repl = CACHE_BINDEX(cp, cp->sets[set].blks, bindex);
+      repl = NUCA_CACHE_BINDEX(cp, cp->sets[set].blks, bindex);
     }
     break;
   default:
@@ -723,7 +733,7 @@ cache_access(struct cache_t *cp,	/* cache to access */
    CP, this interface is used primarily for debugging and asserting cache
    invariants */
 int					/* non-zero if access would hit */
-cache_probe(struct cache_t *cp,		/* cache instance to probe */
+nuca_cache_probe(struct cache_t *cp,		/* cache instance to probe */
 	    md_addr_t addr)		/* address of block to probe */
 {
   md_addr_t tag = CACHE_TAG(cp, addr);
@@ -763,7 +773,7 @@ cache_probe(struct cache_t *cp,		/* cache instance to probe */
 
 /* flush the entire cache, returns latency of the operation */
 unsigned int				/* latency of the flush operation */
-cache_flush(struct cache_t *cp,		/* cache instance to flush */
+nuca_cache_flush(struct cache_t *cp,		/* cache instance to flush */
 	    tick_t now)			/* time of cache flush */
 {
   int i, lat = cp->hit_latency; /* min latency to probe cache */
@@ -802,7 +812,7 @@ cache_flush(struct cache_t *cp,		/* cache instance to flush */
 /* flush the block containing ADDR from the cache CP, returns the latency of
    the block flush operation */
 unsigned int				/* latency of flush operation */
-cache_flush_addr(struct cache_t *cp,	/* cache instance to flush */
+nuca_cache_flush_addr(struct cache_t *cp,	/* cache instance to flush */
 		 md_addr_t addr,	/* address of block to flush */
 		 tick_t now)		/* time of cache flush */
 {
