@@ -112,19 +112,10 @@ enum cache_policy {
 /* cache block (or line) definition */
 struct nuca_cache_blk_t
 {
-  struct cache_blk_t *way_next;	/* next block in the ordered way chain, used
-				   to order blocks for replacement */
-  struct cache_blk_t *way_prev;	/* previous block in the order way chain */
-  struct cache_blk_t *hash_next;/* next block in the hash bucket chain, only
-				   used in highly-associative caches */
-  /* since hash table lists are typically small, there is no previous
-     pointer, deletion requires a trip through the hash table bucket list */
   md_addr_t tag;		/* data block tag value */
   unsigned int status;		/* block status, see CACHE_BLK_* defs above */
   tick_t ready;		/* time when block will be accessible, field
 				   is set when a miss fetch is initiated */
-  byte_t *user_data;		/* pointer to user defined data, e.g.,
-				   pre-decode data or physical page address */
   /* DATA should be pointer-aligned due to preceeding field */
   /* NOTE: this is a variable-size tail array, this must be the LAST field
      defined in this structure! */
@@ -135,23 +126,16 @@ struct nuca_cache_blk_t
 /* cache set definition (one or more blocks sharing the same set index) */
 struct nuca_cache_bank_t
 {
-  struct nuca_cache_set_t **hash;	/* hash table: for fast access w/assoc, NULL
-				   for low-assoc caches */
-  struct nuca_cache_set_t *way_head;	/* head of way list */
-  struct nuca_cache_set_t *way_tail;	/* tail pf way list */
-  struct nuca_cache_set_t *sets;	/* cache blocks, allocated sequentially, so
+  struct nuca_cache_set_t *sets;	/* cache sets, allocated sequentially, so
 				   this pointer can also be used for random
 				   access to cache blocks */
   unsigned int access_time;
+  unsigned int way_number;
 };
 
 /* cache set definition (one or more blocks sharing the same set index) */
 struct nuca_cache_set_t
 {
-  struct cache_blk_t **hash;	/* hash table: for fast access w/assoc, NULL
-				   for low-assoc caches */
-  struct cache_blk_t *way_head;	/* head of way list */
-  struct cache_blk_t *way_tail;	/* tail pf way list */
   struct nuca_cache_blk_t *blks;	/* cache blocks, allocated sequentially, so
 				   this pointer can also be used for random
 				   access to cache blocks */
@@ -192,7 +176,9 @@ struct nuca_cache_t
   md_addr_t blk_mask;
   int set_shift;
   md_addr_t set_mask;		/* use *after* shift */
+  md_addr_t bank_mask;
   int tag_shift;
+  int bank_shift;
   md_addr_t tag_mask;		/* use *after* shift */
   md_addr_t tagset_mask;	/* used for fast hit detection */
 
@@ -212,6 +198,7 @@ struct nuca_cache_t
   counter_t replacements;	/* total number of replacements at misses */
   counter_t writebacks;		/* total number of writebacks at misses */
   counter_t invalidations;	/* total number of external invalidations */
+  counter_t** bank_hits;	/* total number of external invalidations */
 
   /* last block to hit, used to optimize cache hit processing */
   md_addr_t last_tagset;	/* tag of last line accessed */
@@ -222,7 +209,7 @@ struct nuca_cache_t
 
   /* NOTE: this is a variable-size tail array, this must be the LAST field
      defined in this structure! */
-  struct nuca_cache_bank_t banks[1];	/* each entry is a set */
+  struct nuca_cache_bank_t** banks;	/* each entry is a set */
 };
 
 /* create and initialize a general cache structure */
@@ -248,21 +235,21 @@ nuca_cache_char2policy(char c);		/* replacement policy as a char */
 
 /* print cache configuration */
 void
-nuca_cache_config(struct cache_t *cp,	/* cache instance */
+nuca_cache_config(struct nuca_cache_t *cp,	/* cache instance */
 	     FILE *stream);		/* output stream */
 
 /* register cache stats */
 void
-nuca_cache_reg_stats(struct cache_t *cp,	/* cache instance */
+nuca_cache_reg_stats(struct nuca_cache_t *cp,	/* cache instance */
 		struct stat_sdb_t *sdb);/* stats database */
 
 /* print cache stats */
 void
-nuca_cache_stats(struct cache_t *cp,		/* cache instance */
+nuca_cache_stats(struct nuca_cache_t *cp,		/* cache instance */
 	    FILE *stream);		/* output stream */
 
 /* print cache stats */
-void nuca_cache_stats(struct cache_t *cp, FILE *stream);
+void nuca_cache_stats(struct nuca_cache_t *cp, FILE *stream);
 
 /* access a cache, perform a CMD operation on cache CP at address ADDR,
    places NBYTES of data at *P, returns latency of operation if initiated
@@ -270,7 +257,7 @@ void nuca_cache_stats(struct cache_t *cp, FILE *stream);
    cache blocks are not allocated (!CP->BALLOC), UDATA should be NULL if no
    user data is attached to blocks */
 unsigned int				/* latency of access in cycles */
-nuca_cache_access(struct cache_t *cp,	/* cache to access */
+nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
 	     enum mem_cmd cmd,		/* access type, Read or Write */
 	     md_addr_t addr,		/* address of access */
 	     void *vp,			/* ptr to buffer for input/output */

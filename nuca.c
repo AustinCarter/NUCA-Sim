@@ -62,6 +62,7 @@
 #define CACHE_TAG(cp, addr)	((addr) >> (cp)->tag_shift)
 #define CACHE_SET(cp, addr)	(((addr) >> (cp)->set_shift) & (cp)->set_mask)
 #define CACHE_BLK(cp, addr)	((addr) & (cp)->blk_mask)
+#define CACHE_BANK(cp, addr) (((addr) >> (cp)->bank_shift) & (cp)->bank_mask)
 #define CACHE_TAGSET(cp, addr)	((addr) & (cp)->tagset_mask)
 
 /* extract/reconstruct a block address */
@@ -138,52 +139,6 @@
 
 /* bound sqword_t/dfloat_t to positive int */
 #define BOUND_POS(N)		((int)(MIN(MAX(0, (N)), 2147483647)))
-
-/* unlink BLK from the hash table bucket chain in SET */
-static void
-unlink_htab_ent(struct cache_t *cp,		/* cache to update */
-		struct cache_set_t *set,	/* set containing bkt chain */
-		struct cache_blk_t *blk)	/* block to unlink */
-{
-  struct cache_blk_t *prev, *ent;
-  int index = CACHE_HASH(cp, blk->tag);
-
-  /* locate the block in the hash table bucket chain */
-  for (prev=NULL,ent=set->hash[index];
-       ent;
-       prev=ent,ent=ent->hash_next)
-    {
-      if (ent == blk)
-	break;
-    }
-  assert(ent);
-
-  /* unlink the block from the hash table bucket chain */
-  if (!prev)
-    {
-      /* head of hash bucket list */
-      set->hash[index] = ent->hash_next;
-    }
-  else
-    {
-      /* middle or end of hash bucket list */
-      prev->hash_next = ent->hash_next;
-    }
-  ent->hash_next = NULL;
-}
-
-/* insert BLK onto the head of the hash table bucket chain in SET */
-static void
-link_htab_ent(struct cache_t *cp,		/* cache to update */
-	      struct cache_set_t *set,		/* set containing bkt chain */
-	      struct cache_blk_t *blk)		/* block to insert */
-{
-  int index = CACHE_HASH(cp, blk->tag);
-
-  /* insert block onto the head of the bucket chain */
-  blk->hash_next = set->hash[index];
-  set->hash[index] = blk;
-}
 
 /* where to insert a block onto the ordered way chain */
 enum list_loc_t { Head, Tail };
@@ -322,8 +277,10 @@ nuca_cache_create(char *name,		/* name of the cache */
   cp->hsize = CACHE_HIGHLY_ASSOC(cp) ? (assoc >> 2) : 0;
   cp->blk_mask = bsize-1;
   cp->set_shift = log_base2(bsize);
+  cp->bank_shift = cp->set_shift + log_base2(nsets);
   cp->set_mask = nsets-1;
-  cp->tag_shift = cp->set_shift + log_base2(nsets);
+  cp->bank_mask = (nbanks/assoc)-1;
+  cp->tag_shift = cp->bank_shift + log_base2(nbanks/assoc);
   cp->tag_mask = (1 << (32 - cp->tag_shift))-1;
   cp->tagset_mask = ~cp->blk_mask;
   cp->bus_free = 0;
@@ -333,6 +290,8 @@ nuca_cache_create(char *name,		/* name of the cache */
   debug("%s: cp->blk_mask  = 0x%08x", cp->name, cp->blk_mask);
   debug("%s: cp->set_shift = %d", cp->name, cp->set_shift);
   debug("%s: cp->set_mask  = 0x%08x", cp->name, cp->set_mask);
+  debug("%s: cp->bank_shift = %d", cp->name, cp->bank_shift);
+  debug("%s: cp->bank_mask  = 0x%08x", cp->name, cp->bank_mask);
   debug("%s: cp->tag_shift = %d", cp->name, cp->tag_shift);
   debug("%s: cp->tag_mask  = 0x%08x", cp->name, cp->tag_mask);
 
@@ -342,72 +301,43 @@ nuca_cache_create(char *name,		/* name of the cache */
   cp->replacements = 0;
   cp->writebacks = 0;
   cp->invalidations = 0;
+  cp->bank_hits = (counter_t**)calloc(nbanks, sizeof(counter_t));
 
   /* blow away the last block accessed */
   cp->last_tagset = 0;
   cp->last_blk = NULL;
 
+  int z = 0;
+  int b = 0;
+  /* allocate banks */ //2d array of banks
+  /* [bank set, way]*/
+  cp->banks = (struct nuca_cache_bank_t**)calloc(nbanks/assoc, sizeof(struct nuca_cache_bank_t*));
+  for (b=0; b<nbanks/assoc; b++){
+    cp->banks[b] = (struct nuca_cache_bank_t*)calloc(assoc, sizeof(struct nuca_cache_bank_t));
+  }
+  
+
   /* allocate sets */
-
-  /* allocate data blocks */
-  cp->data = (byte_t *)calloc(nbanks*nsets,
-			      sizeof(struct nuca_cache_blk_t) +
-			      (cp->balloc ? (bsize*sizeof(byte_t)) : 0));
-  if (!cp->data)
-    fatal("out of virtual memory");
-
-  /* slice up the data blocks */
-  for (bindex=0,i=0; i<nsets; i++)
-    {
-      cp->banks[i].way_head = NULL;
-      cp->banks[i].way_tail = NULL;
-      /* get a hash table, if needed */
-      if (cp->hsize)
-	{
-	  cp->banks[i].hash =
-	    (struct nuca_cache_set_t **)calloc(nsets,
-					  sizeof(struct nuca_cache_set_t *));
-	  if (!cp->banks[i].hash)
-	    fatal("out of virtual memory");
-	}
-      /* NOTE: all the blocks in a set *must* be allocated contiguously,
-	 otherwise, block accesses through SET->BLKS will fail (used
-	 during random replacement selection) */
-      cp->banks[i].sets[i].hash = (struct cache_blk_t **)calloc(cp->hsize, sizeof(struct cache_blk_t *));
-	  if (!cp->banks[i].sets[i].hash)
-	    fatal("out of virtual memory");
-
-      NUCA_CACHE_BINDEX(cp, cp->data, bindex);
-      
-      /* link the data blocks into ordered way chain and hash table bucket
-         chains, if hash table exists */
-      for (j=0; j<assoc; j++)
-	{
-	  /* locate next cache block */
-	  blk = NUCA_CACHE_BINDEX(cp, cp->data, bindex);
-	  bindex++;
-
-	  /* invalidate new cache block */
-	  blk->status = 0;
-	  blk->tag = 0;
-	  blk->ready = 0;
-	  blk->user_data = (usize != 0
-			    ? (byte_t *)calloc(usize, sizeof(byte_t)) : NULL);
-
-	  /* insert cache block into set hash table */
-	  if (cp->hsize)
-	    link_htab_ent(cp, &cp->sets[i], blk);
-
-	  /* insert into head of way list, order is arbitrary at this point */
-	  blk->way_next = cp->sets[i].way_head;
-	  blk->way_prev = NULL;
-	  if (cp->sets[i].way_head)
-	    cp->sets[i].way_head->way_prev = blk;
-	  cp->sets[i].way_head = blk;
-	  if (!cp->sets[i].way_tail)
-	    cp->sets[i].way_tail = blk;
-	}
+  int s = 0;
+  int w = 0; // way number
+  //Note: consecutive banks are part of the associative bank sets
+  for (b=0; b<nbanks/assoc; b++){
+    for (z=0; z<nbanks; z++){
+      cp->banks[b][z].sets = (struct nuca_cache_set_t*)calloc(nsets, sizeof(struct nuca_cache_set_t));
+      cp->banks[b][z].access_time = 2; //TODO: need to be taken in from file
+      cp->banks[b][z].way_number = w; //
+      /* allocate data blocks */
+      for (s=0; s<nsets; s++){
+        cp->banks[b][z].sets[s].blks = (struct nuca_cache_blk_t*)calloc(1, sizeof(struct nuca_cache_blk_t));
+        cp->banks[b][z].sets[s].blks[0].status = 0;
+        cp->banks[b][z].sets[s].blks[0].tag = 0;
+        cp->banks[b][z].sets[s].blks[0].ready = 0;
+      }
+      if (w == assoc-1){
+        w = 0;
+      }
     }
+  }
   return cp;
 }
 
@@ -425,7 +355,7 @@ nuca_cache_char2policy(char c)		/* replacement policy as a char */
 
 /* print cache configuration */
 void
-nuca_cache_config(struct cache_t *cp,	/* cache instance */
+nuca_cache_config(struct nuca_cache_t *cp,	/* cache instance */
 	     FILE *stream)		/* output stream */
 {
   fprintf(stream,
@@ -442,7 +372,7 @@ nuca_cache_config(struct cache_t *cp,	/* cache instance */
 
 /* register cache stats */
 void
-nuca_cache_reg_stats(struct cache_t *cp,	/* cache instance */
+nuca_cache_reg_stats(struct nuca_cache_t *cp,	/* cache instance */
 		struct stat_sdb_t *sdb)	/* stats database */
 {
   char buf[512], buf1[512], *name;
@@ -481,11 +411,19 @@ nuca_cache_reg_stats(struct cache_t *cp,	/* cache instance */
   sprintf(buf, "%s.inv_rate", name);
   sprintf(buf1, "%s.invalidations / %s.accesses", name, name);
   stat_reg_formula(sdb, buf, "invalidation rate (i.e., invs/ref)", buf1, NULL);
+  sprintf(buf, "Banks Hits");
+  counter_t t = 0;
+  counter_t a = 0;
+  for (t = 0; t<cp->nbanks/cp->assoc; t++){ //TODO: What does stat reg counter do??
+    for (a = 0; a<cp->assoc; a++){
+      stat_reg_counter(sdb, buf, "hits for bank", &cp->bank_hits[t][a], 0, NULL);
+  }
+
 }
 
 /* print cache stats */
 void
-nuca_cache_stats(struct cache_t *cp,		/* cache instance */
+nuca_cache_stats(struct nuca_cache_t *cp,		/* cache instance */
 	    FILE *stream)		/* output stream */
 {
   double sum = (double)(cp->hits + cp->misses);
@@ -507,7 +445,7 @@ nuca_cache_stats(struct cache_t *cp,		/* cache instance */
    cache blocks are not allocated (!CP->BALLOC), UDATA should be NULL if no
    user data is attached to blocks */
 unsigned int				/* latency of access in cycles */
-nuca_cache_access(struct cache_t *cp,	/* cache to access */
+nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
 	     enum mem_cmd cmd,		/* access type, Read or Write */
 	     md_addr_t addr,		/* address of access */
 	     void *vp,			/* ptr to buffer for input/output */
@@ -517,6 +455,7 @@ nuca_cache_access(struct cache_t *cp,	/* cache to access */
 	     md_addr_t *repl_addr)	/* for address of replaced block */
 {
   byte_t *p = vp;
+  md_addr_t bank = CACHE_BANK(cp, addr);
   md_addr_t tag = CACHE_TAG(cp, addr);
   md_addr_t set = CACHE_SET(cp, addr);
   md_addr_t bofs = CACHE_BLK(cp, addr);
@@ -546,23 +485,8 @@ nuca_cache_access(struct cache_t *cp,	/* cache to access */
       blk = cp->last_blk;
       goto cache_fast_hit;
     }
-    
-  if (cp->hsize)
-    {
-      /* higly-associativity cache, access through the per-set hash tables */
-      int hindex = CACHE_HASH(cp, tag);
 
-      for (blk=cp->sets[set].hash[hindex];
-	   blk;
-	   blk=blk->hash_next)
-	{
-	  if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
-	    goto cache_hit;
-	}
-    }
-  else
-    {
-      /* low-associativity cache, linear search the way list */
+      /* TODO: linear search the way list, need to go bank by bank */
       for (blk=cp->sets[set].way_head;
 	   blk;
 	   blk=blk->way_next)
@@ -570,7 +494,7 @@ nuca_cache_access(struct cache_t *cp,	/* cache to access */
 	  if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
 	    goto cache_hit;
 	}
-    }
+    
 
   /* cache block not found */
 
