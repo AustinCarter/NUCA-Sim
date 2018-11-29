@@ -146,7 +146,7 @@ enum list_loc_t { Head, Tail };
 /* insert BLK into the order way chain in SET at location WHERE */
 static void
 update_way_list(struct cache_set_t *set,	/* set contained way chain */
-		struct cache_blk_t *blk,	/* block to insert */
+		struct nuca_cache_blk_t *blk,	/* block to insert */
 		enum list_loc_t where)		/* insert location */
 {
   /* unlink entry from the way list */
@@ -223,13 +223,13 @@ nuca_cache_create(char *name,		/* name of the cache */
 	     /* block access function, see description w/in struct cache def */
 	     unsigned int (*blk_access_fn)(enum mem_cmd cmd,
 					   md_addr_t baddr, int bsize,
-					   struct cache_blk_t *blk,
+					   struct nuca_cache_blk_t *blk,
 					   tick_t now),
 	     unsigned int hit_latency, /* latency in cycles for a hit */
        unsigned int nbanks) /* number of banks */
 {
   struct nuca_cache_t *cp;
-  struct cache_blk_t *blk;
+  struct nuca_cache_blk_t *blk;
   int i, j, bindex;
 
   /* check all cache parameters */
@@ -254,8 +254,8 @@ nuca_cache_create(char *name,		/* name of the cache */
     fatal("must specify miss/replacement functions");
 
   /* allocate the cache structure */
-  cp = (struct nuca_cache_t *)
-    calloc(1, sizeof(struct nuca_cache_t) + (nbanks-1)*sizeof(struct nuca_cache_bank_t));
+  cp = (struct nuca_cache_t*)
+    calloc(1, sizeof(struct nuca_cache_t));
   if (!cp)
     fatal("out of virtual memory");
 
@@ -328,10 +328,10 @@ nuca_cache_create(char *name,		/* name of the cache */
       cp->banks[b][z].way_number = w; //
       /* allocate data blocks */
       for (s=0; s<nsets; s++){
-        cp->banks[b][z].sets[s].blks = (struct nuca_cache_blk_t*)calloc(1, sizeof(struct nuca_cache_blk_t));
-        cp->banks[b][z].sets[s].blks[0].status = 0;
-        cp->banks[b][z].sets[s].blks[0].tag = 0;
-        cp->banks[b][z].sets[s].blks[0].ready = 0;
+        cp->banks[b][z].sets[s].blk = (struct nuca_cache_blk_t*)calloc(1, sizeof(struct nuca_cache_blk_t));
+        cp->banks[b][z].sets[s].blk->status = 0;
+        cp->banks[b][z].sets[s].blk->tag = 0;
+        cp->banks[b][z].sets[s].blk->ready = 0;
       }
       if (w == assoc-1){
         w = 0;
@@ -417,8 +417,8 @@ nuca_cache_reg_stats(struct nuca_cache_t *cp,	/* cache instance */
   for (t = 0; t<cp->nbanks/cp->assoc; t++){ //TODO: What does stat reg counter do??
     for (a = 0; a<cp->assoc; a++){
       stat_reg_counter(sdb, buf, "hits for bank", &cp->bank_hits[t][a], 0, NULL);
+    }
   }
-
 }
 
 /* print cache stats */
@@ -459,42 +459,33 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
   md_addr_t tag = CACHE_TAG(cp, addr);
   md_addr_t set = CACHE_SET(cp, addr);
   md_addr_t bofs = CACHE_BLK(cp, addr);
-  struct cache_blk_t *blk, *repl;
+  struct nuca_cache_blk_t *blk, *repl;
   int lat = 0;
 
   /* default replacement address */
-  if (repl_addr)
+  if (repl_addr){
     *repl_addr = 0;
+  }
 
   /* check alignments */
-  if ((nbytes & (nbytes-1)) != 0 || (addr & (nbytes-1)) != 0)
+  if ((nbytes & (nbytes-1)) != 0 || (addr & (nbytes-1)) != 0){
     fatal("cache: access error: bad size or alignment, addr 0x%08x", addr);
+  }
 
   /* access must fit in cache block */
-  /* FIXME:
-     ((addr + (nbytes - 1)) > ((addr & ~cp->blk_mask) + (cp->bsize - 1))) */
-  if ((addr + nbytes) > ((addr & ~cp->blk_mask) + cp->bsize))
+  if ((addr + nbytes) > ((addr & ~cp->blk_mask) + cp->bsize)){
     fatal("cache: access error: access spans block, addr 0x%08x", addr);
+  }
+    /* permissions are checked on cache misses */
+    /* TODO: linear search the way list, need to go bank by bank */
 
-  /* permissions are checked on cache misses */
-
-  /* check for a fast hit: access to same block */
-  if (CACHE_TAGSET(cp, addr) == cp->last_tagset)
-    {
-      /* hit in the same block */
-      blk = cp->last_blk;
-      goto cache_fast_hit;
+  int w = 0;
+  for (w = 0; w < cp->assoc; w++){
+    blk=cp->banks[bank][w].sets[set].blk;
+    if (blk->tag == tag && (blk->status & CACHE_BLK_VALID)){
+      return cache_hit(cp, cp->banks[bank], w, set, blk, cmd, nbytes, p, bofs, addr, now);
     }
-
-      /* TODO: linear search the way list, need to go bank by bank */
-      for (blk=cp->sets[set].way_head;
-	   blk;
-	   blk=blk->way_next)
-	{
-	  if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
-	    goto cache_hit;
-	}
-    
+  }
 
   /* cache block not found */
 
@@ -503,29 +494,21 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
 
   /* select the appropriate block to replace, and re-link this entry to
      the appropriate place in the way list */
-  switch (cp->policy) {
-  case LRU:
-  case FIFO:
-    repl = cp->sets[set].way_tail;
-    update_way_list(&cp->sets[set], repl, Head);
-    break;
-  case Random:
-    {
-      int bindex = myrand() & (cp->assoc - 1);
-      repl = NUCA_CACHE_BINDEX(cp, cp->sets[set].blks, bindex);
-    }
-    break;
-  default:
-    panic("bogus replacement policy");
-  }
-
-  /* remove this block from the hash bucket chain, if hash exists */
-  if (cp->hsize)
-    unlink_htab_ent(cp, &cp->sets[set], repl);
-
-  /* blow away the last block to hit */
-  cp->last_tagset = 0;
-  cp->last_blk = NULL;
+  // switch (cp->policy) {
+  // case LRU:
+  // case FIFO:
+  //   repl = cp->sets[set].way_tail;
+  //   update_way_list(&cp->sets[set], repl, Head);
+  //   break;
+  // case Random:
+  //   {
+  //     int bindex = myrand() & (cp->assoc - 1);
+  //     repl = NUCA_CACHE_BINDEX(cp, cp->sets[set].blks, bindex);
+  //   }
+  //   break;
+  // default:
+  //   panic("bogus replacement policy");
+  // }
 
   /* write back replaced block data */
   if (repl->status & CACHE_BLK_VALID)
@@ -562,19 +545,19 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
   lat += cp->blk_access_fn(Read, CACHE_BADDR(cp, addr), cp->bsize,
 			   repl, now+lat);
 
-  /* copy data out of cache block */
-  if (cp->balloc)
-    {
-      CACHE_BCOPY(cmd, repl, bofs, p, nbytes);
-    }
+  // /* copy data out of cache block */
+  // if (cp->balloc)
+  //   {
+  //     CACHE_BCOPY(cmd, repl, bofs, p, nbytes);
+  //   }
 
   /* update dirty status */
   if (cmd == Write)
     repl->status |= CACHE_BLK_DIRTY;
 
   /* get user block data, if requested and it exists */
-  if (udata)
-    *udata = repl->user_data;
+  // if (udata)
+  //   *udata = repl->user_data;
 
   /* update block status */
   repl->ready = now+lat;
@@ -586,83 +569,18 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
   /* return latency of the operation */
   return lat;
 
-
- cache_hit: /* slow hit handler */
-  
-  /* **HIT** */
-  cp->hits++;
-
-  /* copy data out of cache block, if block exists */
-  if (cp->balloc)
-    {
-      CACHE_BCOPY(cmd, blk, bofs, p, nbytes);
-    }
-
-  /* update dirty status */
-  if (cmd == Write)
-    blk->status |= CACHE_BLK_DIRTY;
-
-  /* if LRU replacement and this is not the first element of list, reorder */
-  if (blk->way_prev && cp->policy == LRU)
-    {
-      /* move this block to head of the way (MRU) list */
-      update_way_list(&cp->sets[set], blk, Head);
-    }
-
-  /* tag is unchanged, so hash links (if they exist) are still valid */
-
-  /* record the last block to hit */
-  cp->last_tagset = CACHE_TAGSET(cp, addr);
-  cp->last_blk = blk;
-
-  /* get user block data, if requested and it exists */
-  if (udata)
-    *udata = blk->user_data;
-
-  /* return first cycle data is available to access */
-  return (int) MAX(cp->hit_latency, (blk->ready - now));
-
- cache_fast_hit: /* fast hit handler */
-  
-  /* **FAST HIT** */
-  cp->hits++;
-
-  /* copy data out of cache block, if block exists */
-  if (cp->balloc)
-    {
-      CACHE_BCOPY(cmd, blk, bofs, p, nbytes);
-    }
-
-  /* update dirty status */
-  if (cmd == Write)
-    blk->status |= CACHE_BLK_DIRTY;
-
-  /* this block hit last, no change in the way list */
-
-  /* tag is unchanged, so hash links (if they exist) are still valid */
-
-  /* get user block data, if requested and it exists */
-  if (udata)
-    *udata = blk->user_data;
-
-  /* record the last block to hit */
-  cp->last_tagset = CACHE_TAGSET(cp, addr);
-  cp->last_blk = blk;
-
-  /* return first cycle data is available to access */
-  return (int) MAX(cp->hit_latency, (blk->ready - now));
 }
 
 /* return non-zero if block containing address ADDR is contained in cache
    CP, this interface is used primarily for debugging and asserting cache
    invariants */
 int					/* non-zero if access would hit */
-nuca_cache_probe(struct cache_t *cp,		/* cache instance to probe */
+nuca_cache_probe(struct nuca_cache_t *cp,		/* cache instance to probe */
 	    md_addr_t addr)		/* address of block to probe */
 {
   md_addr_t tag = CACHE_TAG(cp, addr);
   md_addr_t set = CACHE_SET(cp, addr);
-  struct cache_blk_t *blk;
+  struct nuca_cache_blk_t *blk;
 
   /* permissions are checked on cache misses */
 
@@ -701,7 +619,7 @@ nuca_cache_flush(struct cache_t *cp,		/* cache instance to flush */
 	    tick_t now)			/* time of cache flush */
 {
   int i, lat = cp->hit_latency; /* min latency to probe cache */
-  struct cache_blk_t *blk;
+  struct nuca_cache_blk_t *blk;
 
   /* blow away the last block to hit */
   cp->last_tagset = 0;
@@ -742,7 +660,7 @@ nuca_cache_flush_addr(struct cache_t *cp,	/* cache instance to flush */
 {
   md_addr_t tag = CACHE_TAG(cp, addr);
   md_addr_t set = CACHE_SET(cp, addr);
-  struct cache_blk_t *blk;
+  struct nuca_cache_blk_t *blk;
   int lat = cp->hit_latency; /* min latency to probe cache */
 
   if (cp->hsize)
@@ -788,9 +706,54 @@ nuca_cache_flush_addr(struct cache_t *cp,	/* cache instance to flush */
 				   cp->bsize, blk, now+lat);
 	}
       /* move this block to tail of the way (LRU) list */
-      update_way_list(&cp->sets[set], blk, Tail);
+      // update_way_list(&cp->sets[set], blk, Tail);
     }
 
   /* return latency of the operation */
   return lat;
+}
+
+int cache_hit(struct nuca_cache_t *cp, struct nuca_cache_bank_t *banks, int wayNumber, md_addr_t set,
+              struct nuca_cache_blk_t *blk, enum mem_cmd cmd, int nbytes, byte_t *p, 
+              md_addr_t bofs, md_addr_t addr, tick_t now){
+    /* **HIT** */
+    cp->hits++;
+    blk->hitCount++;
+
+    /* copy data out of cache block, if block exists */
+    // if (cp->balloc)
+    //   {
+    //     CACHE_BCOPY(cmd, blk, bofs, p, nbytes);
+    //   }
+
+    /* update dirty status */
+    if (cmd == Write)
+      blk->status |= CACHE_BLK_DIRTY;
+
+    //don't need because only one way per set in bank
+    // /* if LRU replacement and this is not the first element of list, reorder */
+    // if (blk->way_prev && cp->policy == LRU)
+    //   {
+    //     /* move this block to head of the way (MRU) list */
+    //     update_way_list(&cp->sets[set], blk, Head);
+    //   }
+
+    /* tag is unchanged, so hash links (if they exist) are still valid */
+
+    // /* record the last block to hit */
+    // cp->last_tagset = CACHE_TAGSET(cp, addr);
+    // cp->last_blk = blk;
+
+    // /* get user block data, if requested and it exists */
+    // if (udata)
+    //   *udata = blk->user_data;
+
+    /* for generational promotion, currently just evicts victim from cache (zero copy) */
+    if (blk->hitCount == cp->hitCount && wayNumber != 0){
+      blk->hitCount = 0;
+      banks[wayNumber-1].sets[set].blk = blk;
+    }
+
+    /* return first cycle data is available to access */
+    return (int) MAX(cp->hit_latency, (blk->ready - now));
 }

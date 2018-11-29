@@ -116,6 +116,7 @@ struct nuca_cache_blk_t
   unsigned int status;		/* block status, see CACHE_BLK_* defs above */
   tick_t ready;		/* time when block will be accessible, field
 				   is set when a miss fetch is initiated */
+  counter_t hitCount; /* keeps track of when to promote for generational promotion */
   /* DATA should be pointer-aligned due to preceeding field */
   /* NOTE: this is a variable-size tail array, this must be the LAST field
      defined in this structure! */
@@ -136,7 +137,7 @@ struct nuca_cache_bank_t
 /* cache set definition (one or more blocks sharing the same set index) */
 struct nuca_cache_set_t
 {
-  struct nuca_cache_blk_t *blks;	/* cache blocks, allocated sequentially, so
+  struct nuca_cache_blk_t *blk;	/* cache blocks, allocated sequentially, so
 				   this pointer can also be used for random
 				   access to cache blocks */
 };
@@ -152,6 +153,7 @@ struct nuca_cache_t
   int balloc;			/* maintain cache contents? */
   int usize;			/* user allocated data size */
   int assoc;			/* cache associativity */
+  int hitCount;   /* hits needed to promote */
   enum cache_policy policy;	/* cache replacement policy */
   unsigned int hit_latency;	/* cache hit latency */
 
@@ -168,7 +170,7 @@ struct nuca_cache_t
     (*blk_access_fn)(enum mem_cmd cmd,		/* block access command */
 		     md_addr_t baddr,		/* program address to access */
 		     int bsize,			/* size of the cache block */
-		     struct cache_blk_t *blk,	/* ptr to cache block struct */
+		     struct nuca_cache_blk_t *blk,	/* ptr to cache block struct */
 		     tick_t now);		/* when fetch was initiated */
 
   /* derived data, for fast decoding */
@@ -202,7 +204,7 @@ struct nuca_cache_t
 
   /* last block to hit, used to optimize cache hit processing */
   md_addr_t last_tagset;	/* tag of last line accessed */
-  struct cache_blk_t *last_blk;	/* cache block last accessed */
+  struct nuca_cache_blk_t *last_blk;	/* cache block last accessed */
 
   /* data blocks */
   byte_t *data;			/* pointer to data blocks allocation */
@@ -224,7 +226,7 @@ nuca_cache_create(char *name,		/* name of the cache */
 	     /* block access function, see description w/in struct cache def */
 	     unsigned int (*blk_access_fn)(enum mem_cmd cmd,
 					   md_addr_t baddr, int bsize,
-					   struct cache_blk_t *blk,
+					   struct nuca_cache_blk_t *blk,
 					   tick_t now),
 	     unsigned int hit_latency, /* latency in cycles for a hit */
        unsigned int nbanks); /* number of banks */
@@ -299,5 +301,9 @@ unsigned int				/* latency of flush operation */
 nuca_cache_flush_addr(struct cache_t *cp,	/* cache instance to flush */
 		 md_addr_t addr,	/* address of block to flush */
 		 tick_t now);		/* time of cache flush */
+
+int cache_hit(struct nuca_cache_t *cp, struct nuca_cache_bank_t *bank, int wayNumber, md_addr_t set,
+              struct nuca_cache_blk_t *blk, enum mem_cmd cmd, int nbytes, 
+              byte_t *p, md_addr_t bofs,  md_addr_t addr, tick_t now);
 
 #endif /* CACHE_H */
