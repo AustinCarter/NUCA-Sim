@@ -613,106 +613,6 @@ nuca_cache_probe(struct nuca_cache_t *cp,		/* cache instance to probe */
   return FALSE;
 }
 
-/* flush the entire cache, returns latency of the operation */
-unsigned int				/* latency of the flush operation */
-nuca_cache_flush(struct cache_t *cp,		/* cache instance to flush */
-	    tick_t now)			/* time of cache flush */
-{
-  int i, lat = cp->hit_latency; /* min latency to probe cache */
-  struct nuca_cache_blk_t *blk;
-
-  /* blow away the last block to hit */
-  cp->last_tagset = 0;
-  cp->last_blk = NULL;
-
-  /* no way list updates required because all blocks are being invalidated */
-  for (i=0; i<cp->nsets; i++)
-    {
-      for (blk=cp->sets[i].way_head; blk; blk=blk->way_next)
-	{
-	  if (blk->status & CACHE_BLK_VALID)
-	    {
-	      cp->invalidations++;
-	      blk->status &= ~CACHE_BLK_VALID;
-
-	      if (blk->status & CACHE_BLK_DIRTY)
-		{
-		  /* write back the invalidated block */
-          	  cp->writebacks++;
-		  lat += cp->blk_access_fn(Write,
-					   CACHE_MK_BADDR(cp, blk->tag, i),
-					   cp->bsize, blk, now+lat);
-		}
-	    }
-	}
-    }
-
-  /* return latency of the flush operation */
-  return lat;
-}
-
-/* flush the block containing ADDR from the cache CP, returns the latency of
-   the block flush operation */
-unsigned int				/* latency of flush operation */
-nuca_cache_flush_addr(struct cache_t *cp,	/* cache instance to flush */
-		 md_addr_t addr,	/* address of block to flush */
-		 tick_t now)		/* time of cache flush */
-{
-  md_addr_t tag = CACHE_TAG(cp, addr);
-  md_addr_t set = CACHE_SET(cp, addr);
-  struct nuca_cache_blk_t *blk;
-  int lat = cp->hit_latency; /* min latency to probe cache */
-
-  if (cp->hsize)
-    {
-      /* higly-associativity cache, access through the per-set hash tables */
-      int hindex = CACHE_HASH(cp, tag);
-
-      for (blk=cp->sets[set].hash[hindex];
-	   blk;
-	   blk=blk->hash_next)
-	{
-	  if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
-	    break;
-	}
-    }
-  else
-    {
-      /* low-associativity cache, linear search the way list */
-      for (blk=cp->sets[set].way_head;
-	   blk;
-	   blk=blk->way_next)
-	{
-	  if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
-	    break;
-	}
-    }
-
-  if (blk)
-    {
-      cp->invalidations++;
-      blk->status &= ~CACHE_BLK_VALID;
-
-      /* blow away the last block to hit */
-      cp->last_tagset = 0;
-      cp->last_blk = NULL;
-
-      if (blk->status & CACHE_BLK_DIRTY)
-	{
-	  /* write back the invalidated block */
-          cp->writebacks++;
-	  lat += cp->blk_access_fn(Write,
-				   CACHE_MK_BADDR(cp, blk->tag, set),
-				   cp->bsize, blk, now+lat);
-	}
-      /* move this block to tail of the way (LRU) list */
-      // update_way_list(&cp->sets[set], blk, Tail);
-    }
-
-  /* return latency of the operation */
-  return lat;
-}
-
 int cache_hit(struct nuca_cache_t *cp, struct nuca_cache_bank_t *banks, int wayNumber, md_addr_t set,
               struct nuca_cache_blk_t *blk, enum mem_cmd cmd, int nbytes, byte_t *p, 
               md_addr_t bofs, md_addr_t addr, tick_t now){
@@ -755,5 +655,5 @@ int cache_hit(struct nuca_cache_t *cp, struct nuca_cache_bank_t *banks, int wayN
     }
 
     /* return first cycle data is available to access */
-    return (int) MAX(cp->hit_latency, (blk->ready - now));
+    return (int) MAX(banks[wayNumber].access_time, (blk->ready - now));
 }
