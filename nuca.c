@@ -144,75 +144,75 @@
 enum list_loc_t { Head, Tail };
 
 /* insert BLK into the order way chain in SET at location WHERE */
-static void
-update_way_list(struct cache_set_t *set,	/* set contained way chain */
-		struct nuca_cache_blk_t *blk,	/* block to insert */
-		enum list_loc_t where)		/* insert location */
-{
-  /* unlink entry from the way list */
-  if (!blk->way_prev && !blk->way_next)
-    {
-      /* only one entry in list (direct-mapped), no action */
-      assert(set->way_head == blk && set->way_tail == blk);
-      /* Head/Tail order already */
-      return;
-    }
-  /* else, more than one element in the list */
-  else if (!blk->way_prev)
-    {
-      assert(set->way_head == blk && set->way_tail != blk);
-      if (where == Head)
-	{
-	  /* already there */
-	  return;
-	}
-      /* else, move to tail */
-      set->way_head = blk->way_next;
-      blk->way_next->way_prev = NULL;
-    }
-  else if (!blk->way_next)
-    {
-      /* end of list (and not front of list) */
-      assert(set->way_head != blk && set->way_tail == blk);
-      if (where == Tail)
-	{
-	  /* already there */
-	  return;
-	}
-      set->way_tail = blk->way_prev;
-      blk->way_prev->way_next = NULL;
-    }
-  else
-    {
-      /* middle of list (and not front or end of list) */
-      assert(set->way_head != blk && set->way_tail != blk);
-      blk->way_prev->way_next = blk->way_next;
-      blk->way_next->way_prev = blk->way_prev;
-    }
+// static void
+// update_way_list(struct cache_set_t *set,	/* set contained way chain */
+// 		struct nuca_cache_blk_t *blk,	/* block to insert */
+// 		enum list_loc_t where)		/* insert location */
+// {
+//   /* unlink entry from the way list */
+//   if (!blk->way_prev && !blk->way_next)
+//     {
+//       /* only one entry in list (direct-mapped), no action */
+//       assert(set->way_head == blk && set->way_tail == blk);
+//       /* Head/Tail order already */
+//       return;
+//     }
+//   /* else, more than one element in the list */
+//   else if (!blk->way_prev)
+//     {
+//       assert(set->way_head == blk && set->way_tail != blk);
+//       if (where == Head)
+// 	{
+// 	  /* already there */
+// 	  return;
+// 	}
+//       /* else, move to tail */
+//       set->way_head = blk->way_next;
+//       blk->way_next->way_prev = NULL;
+//     }
+//   else if (!blk->way_next)
+//     {
+//       /* end of list (and not front of list) */
+//       assert(set->way_head != blk && set->way_tail == blk);
+//       if (where == Tail)
+// 	{
+// 	  /* already there */
+// 	  return;
+// 	}
+//       set->way_tail = blk->way_prev;
+//       blk->way_prev->way_next = NULL;
+//     }
+//   else
+//     {
+//       /* middle of list (and not front or end of list) */
+//       assert(set->way_head != blk && set->way_tail != blk);
+//       blk->way_prev->way_next = blk->way_next;
+//       blk->way_next->way_prev = blk->way_prev;
+//     }
 
-  /* link BLK back into the list */
-  if (where == Head)
-    {
-      /* link to the head of the way list */
-      blk->way_next = set->way_head;
-      blk->way_prev = NULL;
-      set->way_head->way_prev = blk;
-      set->way_head = blk;
-    }
-  else if (where == Tail)
-    {
-      /* link to the tail of the way list */
-      blk->way_prev = set->way_tail;
-      blk->way_next = NULL;
-      set->way_tail->way_next = blk;
-      set->way_tail = blk;
-    }
-  else
-    panic("bogus WHERE designator");
-}
+//   /* link BLK back into the list */
+//   if (where == Head)
+//     {
+//       /* link to the head of the way list */
+//       blk->way_next = set->way_head;
+//       blk->way_prev = NULL;
+//       set->way_head->way_prev = blk;
+//       set->way_head = blk;
+//     }
+//   else if (where == Tail)
+//     {
+//       /* link to the tail of the way list */
+//       blk->way_prev = set->way_tail;
+//       blk->way_next = NULL;
+//       set->way_tail->way_next = blk;
+//       set->way_tail = blk;
+//     }
+//   else
+//     panic("bogus WHERE designator");
+// }
 
 /* create and initialize a general cache structure */
-struct cache_t *			/* pointer to cache created */
+struct nuca_cache_t *			/* pointer to cache created */
 nuca_cache_create(char *name,		/* name of the cache */
 	     int nsets,			/* total number of sets in cache */
 	     int bsize,			/* block (line) size of cache */
@@ -229,8 +229,6 @@ nuca_cache_create(char *name,		/* name of the cache */
        unsigned int nbanks) /* number of banks */
 {
   struct nuca_cache_t *cp;
-  struct nuca_cache_blk_t *blk;
-  int i, j, bindex;
 
   /* check all cache parameters */
   if (nsets <= 0)
@@ -462,11 +460,6 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
   struct nuca_cache_blk_t *blk, *repl;
   int lat = 0;
 
-  /* default replacement address */
-  if (repl_addr){
-    *repl_addr = 0;
-  }
-
   /* check alignments */
   if ((nbytes & (nbytes-1)) != 0 || (addr & (nbytes-1)) != 0){
     fatal("cache: access error: bad size or alignment, addr 0x%08x", addr);
@@ -510,14 +503,14 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
   //   panic("bogus replacement policy");
   // }
 
+  repl = cp->banks[bank][cp->assoc-1].sets[set].blk;
+
   /* write back replaced block data */
   if (repl->status & CACHE_BLK_VALID)
     {
       cp->replacements++;
 
-      if (repl_addr)
-	*repl_addr = CACHE_MK_BADDR(cp, repl->tag, set);
- 
+       
       /* don't replace the block until outstanding misses are satisfied */
       lat += BOUND_POS(repl->ready - now);
  
@@ -528,13 +521,13 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
       cp->bus_free = MAX(cp->bus_free, (now + lat)) + 1;
 
       if (repl->status & CACHE_BLK_DIRTY)
-	{
-	  /* write back the cache block */
-	  cp->writebacks++;
-	  lat += cp->blk_access_fn(Write,
-				   CACHE_MK_BADDR(cp, repl->tag, set),
-				   cp->bsize, repl, now+lat);
-	}
+      {
+        /* write back the cache block */
+        cp->writebacks++;
+        lat += cp->blk_access_fn(Write,
+              CACHE_MK_BADDR(cp, repl->tag, set), //WHAT DOES MK_BADDR DO?
+              cp->bsize, repl, now+lat);
+      }
     }
 
   /* update block tags */
@@ -562,10 +555,6 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
   /* update block status */
   repl->ready = now+lat;
 
-  /* link this entry back into the hash table */
-  if (cp->hsize)
-    link_htab_ent(cp, &cp->sets[set], repl);
-
   /* return latency of the operation */
   return lat;
 
@@ -578,38 +567,39 @@ int					/* non-zero if access would hit */
 nuca_cache_probe(struct nuca_cache_t *cp,		/* cache instance to probe */
 	    md_addr_t addr)		/* address of block to probe */
 {
-  md_addr_t tag = CACHE_TAG(cp, addr);
-  md_addr_t set = CACHE_SET(cp, addr);
-  struct nuca_cache_blk_t *blk;
+  //NEED TO FIX
+  // md_addr_t tag = CACHE_TAG(cp, addr);
+  // md_addr_t set = CACHE_SET(cp, addr);
+  // struct nuca_cache_blk_t *blk;
 
-  /* permissions are checked on cache misses */
+  // /* permissions are checked on cache misses */
 
-  if (cp->hsize)
-  {
-    /* higly-associativity cache, access through the per-set hash tables */
-    int hindex = CACHE_HASH(cp, tag);
+  // if (cp->hsize)
+  // {
+  //   /* higly-associativity cache, access through the per-set hash tables */
+  //   int hindex = CACHE_HASH(cp, tag);
     
-    for (blk=cp->sets[set].hash[hindex];
-	 blk;
-	 blk=blk->hash_next)
-    {	
-      if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
-	  return TRUE;
-    }
-  }
-  else
-  {
-    /* low-associativity cache, linear search the way list */
-    for (blk=cp->sets[set].way_head;
-	 blk;
-	 blk=blk->way_next)
-    {
-      if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
-	  return TRUE;
-    }
-  }
+  //   for (blk=cp->sets[set].hash[hindex];
+	//  blk;
+	//  blk=blk->hash_next)
+  //   {	
+  //     if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
+	//   return TRUE;
+  //   }
+  // }
+  // else
+  // {
+  //   /* low-associativity cache, linear search the way list */
+  //   for (blk=cp->sets[set].way_head;
+	//  blk;
+	//  blk=blk->way_next)
+  //   {
+  //     if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
+	//   return TRUE;
+  //   }
+  // }
   
-  /* cache block not found */
+  // /* cache block not found */
   return FALSE;
 }
 

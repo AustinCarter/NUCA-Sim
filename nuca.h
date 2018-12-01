@@ -215,7 +215,7 @@ struct nuca_cache_t
 };
 
 /* create and initialize a general cache structure */
-struct cache_t *			/* pointer to cache created */
+struct nuca_cache_t *			/* pointer to cache created */
 nuca_cache_create(char *name,		/* name of the cache */
 	     int nsets,			/* total number of sets in cache */
 	     int bsize,			/* block (line) size of cache */
@@ -287,18 +287,18 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
    CP, this interface is used primarily for debugging and asserting cache
    invariants */
 int					/* non-zero if access would hit */
-nuca_cache_probe(struct cache_t *cp,		/* cache instance to probe */
+nuca_cache_probe(struct nuca_cache_t *cp,		/* cache instance to probe */
 	    md_addr_t addr);		/* address of block to probe */
 
 /* flush the entire cache, returns latency of the operation */
 unsigned int				/* latency of the flush operation */
-nuca_cache_flush(struct cache_t *cp,		/* cache instance to flush */
+nuca_cache_flush(struct nuca_cache_t *cp,		/* cache instance to flush */
 	    tick_t now);		/* time of cache flush */
 
 /* flush the block containing ADDR from the cache CP, returns the latency of
    the block flush operation */
 unsigned int				/* latency of flush operation */
-nuca_cache_flush_addr(struct cache_t *cp,	/* cache instance to flush */
+nuca_cache_flush_addr(struct nuca_cache_t *cp,	/* cache instance to flush */
 		 md_addr_t addr,	/* address of block to flush */
 		 tick_t now);		/* time of cache flush */
 
