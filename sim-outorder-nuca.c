@@ -880,7 +880,7 @@ void
 sim_check_options(struct opt_odb_t *odb,        /* options database */
 		  int argc, char **argv)        /* command line arguments */
 {
-  char name[128], c;
+  char name[128], c, d;// c is replacement policy, d is search policy
   int nsets, bsize, assoc;
 
   if (fastfwd_count < 0 || fastfwd_count >= 2147483647)
@@ -1024,12 +1024,12 @@ sim_check_options(struct opt_odb_t *odb,        /* options database */
 	cache_dl2 = NULL;
       else
 	{
-	  if (sscanf(cache_dl2_opt, "%[^:]:%d:%d:%d:%c",
-		     name, &nsets, &bsize, &assoc, &c) != 5)
+	  if (sscanf(cache_dl2_opt, "%[^:]:%d:%d:%d:%c:%c",
+		     name, &nsets, &bsize, &assoc, &c, &d) != 6)
 	    fatal("bad l2 D-cache parms: "
 		  "<name>:<nsets>:<bsize>:<assoc>:<repl>");
 	  cache_dl2 = nuca_cache_create(name, nsets, bsize, /* balloc */FALSE,
-				   /* usize */0, assoc, nuca_cache_char2policy(c),
+				   /* usize */0, assoc, nuca_cache_char2policy(c), nuca_search_char2policy(d),
 				   dl2_access_fn, /* hit lat */cache_dl2_lat, 16 /*nbanks*/);
 	}
     }

@@ -220,6 +220,7 @@ nuca_cache_create(char *name,		/* name of the cache */
 	     int usize,			/* size of user data to alloc w/blks */
 	     int assoc,			/* associativity of cache */
 	     enum nuca_cache_policy policy,	/* replacement policy w/in sets */
+       enum nuca_search_policy search_policy,	/* replacement policy w/in sets */
 	     /* block access function, see description w/in struct cache def */
 	     unsigned int (*blk_access_fn)(enum mem_cmd cmd,
 					   md_addr_t baddr, int bsize,
@@ -266,6 +267,7 @@ nuca_cache_create(char *name,		/* name of the cache */
   cp->usize = usize;
   cp->assoc = assoc;
   cp->policy = policy;
+  cp->search_policy = search_policy;
   cp->hit_latency = hit_latency;
 
   /* miss/replacement functions */
@@ -350,6 +352,18 @@ nuca_cache_char2policy(char c)		/* replacement policy as a char */
   }
 }
 
+/* parse policy */
+enum nuca_search_policy			/* search policy enum */
+nuca_search_char2policy(char c)		/* search policy as a char */
+{
+  switch (c) {
+  case 'i': return INCREMENTAL;
+  case 'm': return MULTICAST;
+  case 'l': return LIMITED_MULTICAST;
+  case 'p': return PARTITIONED_MULTICAST;
+  default: fatal("bogus replacement policy, `%c'", c);
+  }
+}
 
 /* print cache configuration */
 void
@@ -470,12 +484,13 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
   }
     /* permissions are checked on cache misses */
     /* TODO: linear search the way list, need to go bank by bank */
-
+  int acc_time = 0;
   int w = 0;
   for (w = 0; w < cp->assoc; w++){
     blk=cp->banks[bank][w].sets[set].blk;
+    acc_time += cp->banks[bank][w].access_time;
     if (blk->tag == tag && (blk->status & CACHE_BLK_VALID)){
-      return cache_hit(cp, cp->banks[bank], w, set, blk, cmd, nbytes, p, bofs, addr, now);
+      return cache_hit(cp, cp->banks[bank], w, set, blk, cmd, nbytes, p, bofs, addr, now, acc_time);
     }
   }
 
@@ -486,24 +501,21 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
 
   /* select the appropriate block to replace, and re-link this entry to
      the appropriate place in the way list */
-  // switch (cp->policy) {
-  // case LRU:
-  // case FIFO:
-  //   repl = cp->sets[set].way_tail;
-  //   update_way_list(&cp->sets[set], repl, Head);
-  //   break;
-  // case Random:
-  //   {
-  //     int bindex = myrand() & (cp->assoc - 1);
-  //     repl = NUCA_CACHE_BINDEX(cp, cp->sets[set].blks, bindex);
-  //   }
-  //   break;
-  // default:
-  //   panic("bogus replacement policy");
-  // }
-
   repl = cp->banks[bank][cp->assoc-1].sets[set].blk;
-  cp->banks[bank][cp->assoc-1].sets[set].blk = blk;
+
+  switch (cp->policy) {
+  case ZERO_COPY:
+    cp->banks[bank][cp->assoc-1].sets[set].blk = blk;
+    break;
+  case ONE_COPY:
+    for (w = cp->assoc-1; w > 0; w--){
+      cp->banks[bank][w].sets[set].blk = cp->banks[bank][w-1].sets[set].blk; //move all blocks one bank back, evicting last block
+    }
+    cp->banks[bank][0].sets[set].blk = blk;
+  default:
+    panic("bogus replacement policy");
+  }
+
   /* write back replaced block data */
   if (repl->status & CACHE_BLK_VALID)
     {
@@ -580,7 +592,7 @@ nuca_cache_probe(struct nuca_cache_t *cp,		/* cache instance to probe */
 
 int cache_hit(struct nuca_cache_t *cp, struct nuca_cache_bank_t *banks, int wayNumber, md_addr_t set,
               struct nuca_cache_blk_t *blk, enum mem_cmd cmd, int nbytes, byte_t *p, 
-              md_addr_t bofs, md_addr_t addr, tick_t now){
+              md_addr_t bofs, md_addr_t addr, tick_t now, int acc_time){
     /* **HIT** */
     cp->hits++;
     blk->hitCount++;
@@ -620,5 +632,25 @@ int cache_hit(struct nuca_cache_t *cp, struct nuca_cache_bank_t *banks, int wayN
     }
 
     /* return first cycle data is available to access */
-    return (int) MAX(banks[wayNumber].access_time, (blk->ready - now));
+  
+    int access_time = acc_time; //default is incremental
+      switch (cp->search_policy) {
+        case INCREMENTAL:
+        case MULTICAST:
+          access_time = banks[wayNumber].access_time;
+          break;
+        case LIMITED_MULTICAST:
+          if (wayNumber > 1){ //TODO 1 is arbitrary, could be any n < assoc
+            int w = 0;
+            access_time = banks[wayNumber].access_time;
+            for (w = 0; w <= 1; w++){
+              access_time += banks[w].access_time;
+            }
+          }
+          break;
+        case PARTITIONED_MULTICAST:
+      default:
+        panic("bogus search policy");
+  }
+    return (int) MAX(access_time, (blk->ready - now));
 }

@@ -104,6 +104,14 @@ enum nuca_cache_policy {
   ONE_COPY
 };
 
+/* cache search policy */
+enum nuca_search_policy {
+  INCREMENTAL,
+  MULTICAST,
+  LIMITED_MULTICAST,
+  PARTITIONED_MULTICAST
+};
+
 /* block status values */
 #define CACHE_BLK_VALID		0x00000001	/* block in valid, in use */
 #define CACHE_BLK_DIRTY		0x00000002	/* dirty block */
@@ -154,6 +162,7 @@ struct nuca_cache_t
   int assoc;			/* cache associativity */
   int hitCount;   /* hits needed to promote */
   enum nuca_cache_policy policy;	/* cache replacement policy */
+  enum nuca_search_policy search_policy; /* cache search policy */
   unsigned int hit_latency;	/* cache hit latency */
 
   /* miss/replacement handler, read/write BSIZE bytes starting at BADDR
@@ -222,6 +231,7 @@ nuca_cache_create(char *name,		/* name of the cache */
 	     int usize,			/* size of user data to alloc w/blks */
 	     int assoc,			/* associativity of cache */
 	     enum nuca_cache_policy policy,	/* replacement policy w/in sets */
+       enum nuca_search_policy search_policy,	/* replacement policy w/in sets */
 	     /* block access function, see description w/in struct cache def */
 	     unsigned int (*blk_access_fn)(enum mem_cmd cmd,
 					   md_addr_t baddr, int bsize,
@@ -233,6 +243,9 @@ nuca_cache_create(char *name,		/* name of the cache */
 /* parse policy */
 enum nuca_cache_policy			/* replacement policy enum */
 nuca_cache_char2policy(char c);		/* replacement policy as a char */
+
+enum nuca_search_policy			/* search policy enum */
+nuca_search_char2policy(char c)		/* search policy as a char */
 
 /* print cache configuration */
 void
@@ -303,6 +316,6 @@ nuca_cache_flush_addr(struct nuca_cache_t *cp,	/* cache instance to flush */
 
 int cache_hit(struct nuca_cache_t *cp, struct nuca_cache_bank_t *bank, int wayNumber, md_addr_t set,
               struct nuca_cache_blk_t *blk, enum mem_cmd cmd, int nbytes, 
-              byte_t *p, md_addr_t bofs,  md_addr_t addr, tick_t now);
+              byte_t *p, md_addr_t bofs,  md_addr_t addr, tick_t now, int acc_time);
 
 #endif /* CACHE_H */
