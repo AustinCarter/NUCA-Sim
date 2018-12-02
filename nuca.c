@@ -67,8 +67,8 @@
 
 /* extract/reconstruct a block address */
 #define CACHE_BADDR(cp, addr)	((addr) & ~(cp)->blk_mask)
-#define CACHE_MK_BADDR(cp, tag, set)					\
-  (((tag) << (cp)->tag_shift)|((set) << (cp)->set_shift))
+#define CACHE_MK_BADDR(cp, tag, bank, set)					\
+  (((tag) << (cp)->tag_shift) | ((bank) << (cp)->bank_shift) | ((set) << (cp)->set_shift))
 
 /* index an array of cache blocks, non-trivial due to variable length blocks */
 #define NUCA_CACHE_BINDEX(cp, blks, i)					\
@@ -504,13 +504,12 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
   // }
 
   repl = cp->banks[bank][cp->assoc-1].sets[set].blk;
-
+  cp->banks[bank][cp->assoc-1].sets[set].blk = blk;
   /* write back replaced block data */
   if (repl->status & CACHE_BLK_VALID)
     {
       cp->replacements++;
 
-       
       /* don't replace the block until outstanding misses are satisfied */
       lat += BOUND_POS(repl->ready - now);
  
@@ -525,7 +524,7 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
         /* write back the cache block */
         cp->writebacks++;
         lat += cp->blk_access_fn(Write,
-              CACHE_MK_BADDR(cp, repl->tag, set), //WHAT DOES MK_BADDR DO?
+              CACHE_MK_BADDR(cp, repl->tag, bank, set),
               cp->bsize, repl, now+lat);
       }
     }
@@ -533,16 +532,11 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
   /* update block tags */
   repl->tag = tag;
   repl->status = CACHE_BLK_VALID;	/* dirty bit set on update */
+  repl->hitCount = 0;
 
   /* read data block */
   lat += cp->blk_access_fn(Read, CACHE_BADDR(cp, addr), cp->bsize,
 			   repl, now+lat);
-
-  // /* copy data out of cache block */
-  // if (cp->balloc)
-  //   {
-  //     CACHE_BCOPY(cmd, repl, bofs, p, nbytes);
-  //   }
 
   /* update dirty status */
   if (cmd == Write)
@@ -567,37 +561,19 @@ int					/* non-zero if access would hit */
 nuca_cache_probe(struct nuca_cache_t *cp,		/* cache instance to probe */
 	    md_addr_t addr)		/* address of block to probe */
 {
-  //NEED TO FIX
-  // md_addr_t tag = CACHE_TAG(cp, addr);
-  // md_addr_t set = CACHE_SET(cp, addr);
-  // struct nuca_cache_blk_t *blk;
+  md_addr_t tag = CACHE_TAG(cp, addr);
+  md_addr_t set = CACHE_SET(cp, addr);
+  md_addr_t bank = CACHE_BANK(cp, addr);
+  struct nuca_cache_blk_t *blk;
 
-  // /* permissions are checked on cache misses */
-
-  // if (cp->hsize)
-  // {
-  //   /* higly-associativity cache, access through the per-set hash tables */
-  //   int hindex = CACHE_HASH(cp, tag);
-    
-  //   for (blk=cp->sets[set].hash[hindex];
-	//  blk;
-	//  blk=blk->hash_next)
-  //   {	
-  //     if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
-	//   return TRUE;
-  //   }
-  // }
-  // else
-  // {
-  //   /* low-associativity cache, linear search the way list */
-  //   for (blk=cp->sets[set].way_head;
-	//  blk;
-	//  blk=blk->way_next)
-  //   {
-  //     if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
-	//   return TRUE;
-  //   }
-  // }
+  /* low-associativity cache, linear search the way list */
+  int w = 0;
+  for (w = 0; w < cp->assoc; w++){
+    blk=cp->banks[bank][w].sets[set].blk;
+    if (blk->tag == tag && (blk->status & CACHE_BLK_VALID)){
+      return TRUE;
+    }
+  }
   
   // /* cache block not found */
   return FALSE;
