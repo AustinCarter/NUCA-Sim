@@ -99,10 +99,9 @@
 #define CACHE_HIGHLY_ASSOC(cp)	((cp)->assoc > 4)
 
 /* cache replacement policy */
-enum cache_policy {
-  LRU,		/* replace least recently used block (perfect LRU) */
-  Random,	/* replace a random block */
-  FIFO		/* replace the oldest block in the set */
+enum nuca_cache_policy {
+  ZERO_COPY,
+  ONE_COPY
 };
 
 /* block status values */
@@ -154,7 +153,7 @@ struct nuca_cache_t
   int usize;			/* user allocated data size */
   int assoc;			/* cache associativity */
   int hitCount;   /* hits needed to promote */
-  enum cache_policy policy;	/* cache replacement policy */
+  enum nuca_cache_policy policy;	/* cache replacement policy */
   unsigned int hit_latency;	/* cache hit latency */
 
   /* miss/replacement handler, read/write BSIZE bytes starting at BADDR
@@ -222,7 +221,7 @@ nuca_cache_create(char *name,		/* name of the cache */
 	     int balloc,		/* allocate data space for blocks? */
 	     int usize,			/* size of user data to alloc w/blks */
 	     int assoc,			/* associativity of cache */
-	     enum cache_policy policy,	/* replacement policy w/in sets */
+	     enum nuca_cache_policy policy,	/* replacement policy w/in sets */
 	     /* block access function, see description w/in struct cache def */
 	     unsigned int (*blk_access_fn)(enum mem_cmd cmd,
 					   md_addr_t baddr, int bsize,
@@ -232,7 +231,7 @@ nuca_cache_create(char *name,		/* name of the cache */
        unsigned int nbanks); /* number of banks */
 
 /* parse policy */
-enum cache_policy			/* replacement policy enum */
+enum nuca_cache_policy			/* replacement policy enum */
 nuca_cache_char2policy(char c);		/* replacement policy as a char */
 
 /* print cache configuration */

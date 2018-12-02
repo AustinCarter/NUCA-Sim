@@ -61,6 +61,7 @@
 #include "regs.h"
 #include "memory.h"
 #include "cache.h"
+#include "nuca.h"
 #include "loader.h"
 #include "syscall.h"
 #include "bpred.h"
@@ -377,7 +378,7 @@ static struct cache_t *cache_il2;
 static struct cache_t *cache_dl1;
 
 /* level 2 data cache */
-static struct cache_t *cache_dl2;
+static struct nuca_cache_t *cache_dl2;
 
 /* instruction TLB */
 static struct cache_t *itlb;
@@ -437,7 +438,7 @@ dl1_access_fn(enum mem_cmd cmd,		/* access cmd, Read or Write */
   if (cache_dl2)
     {
       /* access next level of data cache hierarchy */
-      lat = cache_access(cache_dl2, cmd, baddr, NULL, bsize,
+      lat = nuca_cache_access(cache_dl2, cmd, baddr, NULL, bsize,
 			 /* now */now, /* pudata */NULL, /* repl addr */NULL);
       if (cmd == Read)
 	return lat;
@@ -465,7 +466,7 @@ static unsigned int			/* latency of block access */
 dl2_access_fn(enum mem_cmd cmd,		/* access cmd, Read or Write */
 	      md_addr_t baddr,		/* block address to access */
 	      int bsize,		/* size of block to access */
-	      struct cache_blk_t *blk,	/* ptr to block in upper level */
+	      struct nuca_cache_blk_t *blk,	/* ptr to block in upper level */
 	      tick_t now)		/* time of access */
 {
   /* this is a miss to the lowest level, so access main memory */
@@ -1027,9 +1028,9 @@ sim_check_options(struct opt_odb_t *odb,        /* options database */
 		     name, &nsets, &bsize, &assoc, &c) != 5)
 	    fatal("bad l2 D-cache parms: "
 		  "<name>:<nsets>:<bsize>:<assoc>:<repl>");
-	  cache_dl2 = cache_create(name, nsets, bsize, /* balloc */FALSE,
-				   /* usize */0, assoc, cache_char2policy(c),
-				   dl2_access_fn, /* hit lat */cache_dl2_lat);
+	  cache_dl2 = nuca_cache_create(name, nsets, bsize, /* balloc */FALSE,
+				   /* usize */0, assoc, nuca_cache_char2policy(c),
+				   dl2_access_fn, /* hit lat */cache_dl2_lat, 16 /*nbanks*/);
 	}
     }
 
@@ -1058,7 +1059,7 @@ sim_check_options(struct opt_odb_t *odb,        /* options database */
     {
       if (!cache_dl2)
 	fatal("I-cache l1 cannot access D-cache l2 as it's undefined");
-      // cache_il1 = cache_dl2;
+      cache_il1 = cache_dl2;
 
       /* the level 2 I-cache cannot be defined */
       if (strcmp(cache_il2_opt, "none"))
@@ -1081,7 +1082,7 @@ sim_check_options(struct opt_odb_t *odb,        /* options database */
 	{
 	  if (!cache_dl2)
 	    fatal("I-cache l2 cannot access D-cache l2 as it's undefined");
-	  // cache_il2 = cache_dl2;
+	  cache_il2 = cache_dl2;
 	}
       else
 	{
@@ -1307,7 +1308,7 @@ sim_reg_stats(struct stat_sdb_t *sdb)   /* stats database */
   if (cache_dl1)
     cache_reg_stats(cache_dl1, sdb);
   if (cache_dl2)
-    cache_reg_stats(cache_dl2, sdb);
+    nuca_cache_reg_stats(cache_dl2, sdb);
   if (itlb)
     cache_reg_stats(itlb, sdb);
   if (dtlb)

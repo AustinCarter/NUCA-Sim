@@ -219,7 +219,7 @@ nuca_cache_create(char *name,		/* name of the cache */
 	     int balloc,		/* allocate data space for blocks? */
 	     int usize,			/* size of user data to alloc w/blks */
 	     int assoc,			/* associativity of cache */
-	     enum cache_policy policy,	/* replacement policy w/in sets */
+	     enum nuca_cache_policy policy,	/* replacement policy w/in sets */
 	     /* block access function, see description w/in struct cache def */
 	     unsigned int (*blk_access_fn)(enum mem_cmd cmd,
 					   md_addr_t baddr, int bsize,
@@ -340,16 +340,16 @@ nuca_cache_create(char *name,		/* name of the cache */
 }
 
 /* parse policy */
-enum cache_policy			/* replacement policy enum */
+enum nuca_cache_policy			/* replacement policy enum */
 nuca_cache_char2policy(char c)		/* replacement policy as a char */
 {
   switch (c) {
-  case 'l': return LRU;
-  case 'r': return Random;
-  case 'f': return FIFO;
+  case 'z': return ZERO_COPY;
+  case 'o': return ONE_COPY;
   default: fatal("bogus replacement policy, `%c'", c);
   }
 }
+
 
 /* print cache configuration */
 void
@@ -362,9 +362,8 @@ nuca_cache_config(struct nuca_cache_t *cp,	/* cache instance */
   fprintf(stream,
 	  "cache: %s: %d-way, `%s' replacement policy, write-back\n",
 	  cp->name, cp->assoc,
-	  cp->policy == LRU ? "LRU"
-	  : cp->policy == Random ? "Random"
-	  : cp->policy == FIFO ? "FIFO"
+	  cp->policy == ZERO_COPY ? "Zero-Copy"
+	  : cp->policy == ONE_COPY ? "One-Copy"
 	  : (abort(), ""));
 }
 
