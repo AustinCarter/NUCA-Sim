@@ -238,14 +238,15 @@ nuca_cache_create(char *name,		/* name of the cache */
 					   struct nuca_cache_blk_t *blk,
 					   tick_t now),
 	     unsigned int hit_latency, /* latency in cycles for a hit */
-       unsigned int nbanks); /* number of banks */
+       unsigned int nbanks, /* number of banks */
+       unsigned int hit_count /* determines number of hits needed for a generational promotion */);
 
 /* parse policy */
 enum nuca_cache_policy			/* replacement policy enum */
 nuca_cache_char2policy(char c);		/* replacement policy as a char */
 
 enum nuca_search_policy			/* search policy enum */
-nuca_search_char2policy(char c)		/* search policy as a char */
+nuca_search_char2policy(char c);		/* search policy as a char */
 
 /* print cache configuration */
 void

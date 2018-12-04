@@ -227,7 +227,8 @@ nuca_cache_create(char *name,		/* name of the cache */
 					   struct nuca_cache_blk_t *blk,
 					   tick_t now),
 	     unsigned int hit_latency, /* latency in cycles for a hit */
-       unsigned int nbanks) /* number of banks */
+       unsigned int nbanks, /* number of banks */
+       unsigned int hit_count /* determines number of hits needed for a generational promotion */) 
 {
   struct nuca_cache_t *cp;
 
@@ -269,12 +270,14 @@ nuca_cache_create(char *name,		/* name of the cache */
   cp->policy = policy;
   cp->search_policy = search_policy;
   cp->hit_latency = hit_latency;
+  cp->hitCount = hit_count;
 
   /* miss/replacement functions */
   cp->blk_access_fn = blk_access_fn;
-
+  debug("%s: bsize     = %d", cp->name, bsize);
+  debug("%s: nsets     = %d", cp->name, nsets);
+  debug("%s: nbanks    = %d", cp->name, nbanks);
   /* compute derived parameters */
-  cp->hsize = CACHE_HIGHLY_ASSOC(cp) ? (assoc >> 2) : 0;
   cp->blk_mask = bsize-1;
   cp->set_shift = log_base2(bsize);
   cp->bank_shift = cp->set_shift + log_base2(nsets);
@@ -286,7 +289,6 @@ nuca_cache_create(char *name,		/* name of the cache */
   cp->bus_free = 0;
 
   /* print derived parameters during debug */
-  debug("%s: cp->hsize     = %d", cp->name, cp->hsize);
   debug("%s: cp->blk_mask  = 0x%08x", cp->name, cp->blk_mask);
   debug("%s: cp->set_shift = %d", cp->name, cp->set_shift);
   debug("%s: cp->set_mask  = 0x%08x", cp->name, cp->set_mask);
@@ -301,7 +303,11 @@ nuca_cache_create(char *name,		/* name of the cache */
   cp->replacements = 0;
   cp->writebacks = 0;
   cp->invalidations = 0;
-  cp->bank_hits = (counter_t**)calloc(nbanks, sizeof(counter_t));
+  cp->bank_hits = (counter_t**)calloc(nbanks/assoc, sizeof(counter_t*));
+  int bcounter = 0;
+  for (bcounter = 0; bcounter<nbanks/assoc; bcounter++){
+    cp->bank_hits[bcounter] = (counter_t*)calloc(assoc, sizeof(counter_t));
+  }
 
   /* blow away the last block accessed */
   cp->last_tagset = 0;
@@ -322,7 +328,7 @@ nuca_cache_create(char *name,		/* name of the cache */
   int w = 0; // way number
   //Note: consecutive banks are part of the associative bank sets
   for (b=0; b<nbanks/assoc; b++){
-    for (z=0; z<nbanks; z++){
+    for (z=0; z<assoc; z++){
       cp->banks[b][z].sets = (struct nuca_cache_set_t*)calloc(nsets, sizeof(struct nuca_cache_set_t));
       cp->banks[b][z].access_time = 2; //TODO: need to be taken in from file
       cp->banks[b][z].way_number = w; //
@@ -333,9 +339,7 @@ nuca_cache_create(char *name,		/* name of the cache */
         cp->banks[b][z].sets[s].blk->tag = 0;
         cp->banks[b][z].sets[s].blk->ready = 0;
       }
-      if (w == assoc-1){
-        w = 0;
-      }
+
     }
   }
   return cp;
@@ -361,7 +365,7 @@ nuca_search_char2policy(char c)		/* search policy as a char */
   case 'm': return MULTICAST;
   case 'l': return LIMITED_MULTICAST;
   case 'p': return PARTITIONED_MULTICAST;
-  default: fatal("bogus replacement policy, `%c'", c);
+  default: fatal("bogus search policy, `%c'", c);
   }
 }
 
@@ -486,14 +490,19 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
     /* TODO: linear search the way list, need to go bank by bank */
   int acc_time = 0;
   int w = 0;
+  int invalidWay = -1;
   for (w = 0; w < cp->assoc; w++){
     blk=cp->banks[bank][w].sets[set].blk;
+    debug("bank: %d, way: %d, set: %d, addr: %x, cache tag: %x, block tag: %x", bank, w, set, addr, blk->tag, tag);
     acc_time += cp->banks[bank][w].access_time;
+    if (!(blk->status & CACHE_BLK_VALID)){
+      invalidWay = w;
+    }
     if (blk->tag == tag && (blk->status & CACHE_BLK_VALID)){
+      cp->bank_hits[bank][w]++;
       return cache_hit(cp, cp->banks[bank], w, set, blk, cmd, nbytes, p, bofs, addr, now, acc_time);
     }
   }
-
   /* cache block not found */
 
   /* **MISS** */
@@ -501,21 +510,28 @@ nuca_cache_access(struct nuca_cache_t *cp,	/* cache to access */
 
   /* select the appropriate block to replace, and re-link this entry to
      the appropriate place in the way list */
-  repl = cp->banks[bank][cp->assoc-1].sets[set].blk;
 
-  switch (cp->policy) {
-  case ZERO_COPY:
-    cp->banks[bank][cp->assoc-1].sets[set].blk = blk;
-    break;
-  case ONE_COPY:
-    for (w = cp->assoc-1; w > 0; w--){
-      cp->banks[bank][w].sets[set].blk = cp->banks[bank][w-1].sets[set].blk; //move all blocks one bank back, evicting last block
+  if (invalidWay == -1){
+    repl = cp->banks[bank][cp->assoc-1].sets[set].blk;
+
+    switch (cp->policy) {
+    case ZERO_COPY:
+      repl = cp->banks[bank][cp->assoc-1].sets[set].blk;
+      break;
+    case ONE_COPY:
+      repl = cp->banks[bank][cp->assoc-1].sets[set].blk; //save evicted one temporarily
+      for (w = cp->assoc-1; w > 0; w--){
+        cp->banks[bank][w].sets[set].blk = cp->banks[bank][w-1].sets[set].blk; //move all blocks one bank back, evicting last block
+      }
+      cp->banks[bank][0].sets[set].blk = repl; //this way block still different, just need to reset stuff
+      break;
+    default:
+      panic("bogus replacement policy");
     }
-    cp->banks[bank][0].sets[set].blk = blk;
-  default:
-    panic("bogus replacement policy");
   }
-
+  else{
+    repl = cp->banks[bank][invalidWay].sets[set].blk;
+  }
   /* write back replaced block data */
   if (repl->status & CACHE_BLK_VALID)
     {
@@ -625,10 +641,26 @@ int cache_hit(struct nuca_cache_t *cp, struct nuca_cache_bank_t *banks, int wayN
     // if (udata)
     //   *udata = blk->user_data;
 
-    /* for generational promotion, currently just evicts victim from cache (zero copy) */
+    /* for generational promotion*/
     if (blk->hitCount == cp->hitCount && wayNumber != 0){
-      blk->hitCount = 0;
-      banks[wayNumber-1].sets[set].blk = blk;
+      struct nuca_cache_blk_t *temp;
+      switch (cp->policy) {
+        case ZERO_COPY:
+          blk->hitCount = 0;
+          banks[wayNumber-1].sets[set].blk->tag = blk->tag;
+          banks[wayNumber-1].sets[set].blk->status = CACHE_BLK_VALID;
+          banks[wayNumber-1].sets[set].blk->hitCount = 0;
+          blk->status = 0;         
+          break;
+        case ONE_COPY:
+          temp = banks[wayNumber-1].sets[set].blk; //save evicted one temporarily
+          banks[wayNumber-1].sets[set].blk = banks[wayNumber].sets[set].blk;
+          banks[wayNumber].sets[set].blk = temp; //do we keep hit count the same? I think so
+          break;
+        default:
+          panic("bogus replacement policy");
+        }
+
     }
 
     /* return first cycle data is available to access */
@@ -636,6 +668,7 @@ int cache_hit(struct nuca_cache_t *cp, struct nuca_cache_bank_t *banks, int wayN
     int access_time = acc_time; //default is incremental
       switch (cp->search_policy) {
         case INCREMENTAL:
+          break;
         case MULTICAST:
           access_time = banks[wayNumber].access_time;
           break;
@@ -649,8 +682,11 @@ int cache_hit(struct nuca_cache_t *cp, struct nuca_cache_bank_t *banks, int wayN
           }
           break;
         case PARTITIONED_MULTICAST:
+          access_time = banks[wayNumber].access_time;
+          break;
       default:
         panic("bogus search policy");
   }
+    debug("Access Time: %d", (int) MAX(access_time, (blk->ready - now)));
     return (int) MAX(access_time, (blk->ready - now));
 }

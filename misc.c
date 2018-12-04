@@ -302,8 +302,11 @@ log_base2(int n)
 {
   int power = 0;
 
-  if (n <= 0 || (n & (n-1)) != 0)
-    panic("log2() only works for positive power of two values");
+  if (n <= 0 || (n & (n-1)) != 0){
+    char str[100];
+    sprintf (str, "log2() only works for positive power of two values. The value is %d.", n);
+    panic(str);
+  }
 
   while (n >>= 1)
     power++;
