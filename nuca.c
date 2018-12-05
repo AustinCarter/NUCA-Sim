@@ -221,6 +221,7 @@ nuca_cache_create(char *name,		/* name of the cache */
 	     int assoc,			/* associativity of cache */
 	     enum nuca_cache_policy policy,	/* replacement policy w/in sets */
        enum nuca_search_policy search_policy,	/* replacement policy w/in sets */
+       enum nuca_mapping_policy mapping_policy,	/* replacement policy w/in sets */
 	     /* block access function, see description w/in struct cache def */
 	     unsigned int (*blk_access_fn)(enum mem_cmd cmd,
 					   md_addr_t baddr, int bsize,
@@ -327,10 +328,23 @@ nuca_cache_create(char *name,		/* name of the cache */
   int s = 0;
   int w = 0; // way number
   //Note: consecutive banks are part of the associative bank sets
+  FILE *bank_org_file;
+  char* path = "./bank_orgs/";
+  char filepath[64];
+  sprintf(filepath, "%sbanks_%s_%u.txt", path, 
+          (mapping_policy == SIMPLE ? "simple" : mapping_policy == SHARED ? "shared" 
+          : mapping_policy == FAIR ? "fair" : (abort(), "")), 
+          nbanks);
+  debug ("filepath: %s\n",filepath);
+  bank_org_file = fopen(filepath, "r");
+  if (bank_org_file == NULL){
+    fatal("file does not exist at path: %s", filepath);
+  }
   for (b=0; b<nbanks/assoc; b++){
     for (z=0; z<assoc; z++){
       cp->banks[b][z].sets = (struct nuca_cache_set_t*)calloc(nsets, sizeof(struct nuca_cache_set_t));
-      cp->banks[b][z].access_time = 2; //TODO: need to be taken in from file
+      fscanf(bank_org_file, "%d", &(cp->banks[b][z].access_time));
+      debug("Access Time: %d\n", cp->banks[b][z].access_time);
       cp->banks[b][z].way_number = w; //
       /* allocate data blocks */
       for (s=0; s<nsets; s++){
@@ -342,6 +356,7 @@ nuca_cache_create(char *name,		/* name of the cache */
 
     }
   }
+  fclose(bank_org_file);
   return cp;
 }
 
@@ -366,6 +381,18 @@ nuca_search_char2policy(char c)		/* search policy as a char */
   case 'l': return LIMITED_MULTICAST;
   case 'p': return PARTITIONED_MULTICAST;
   default: fatal("bogus search policy, `%c'", c);
+  }
+}
+
+/* parse policy */
+enum nuca_mapping_policy			/* search policy enum */
+nuca_mapping_char2policy(char c)		/* search policy as a char */
+{
+  switch (c) {
+  case 's': return SIMPLE;
+  case 'h': return SHARED;
+  case 'f': return FAIR;
+  default: fatal("bogus mapping policy, `%c'", c);
   }
 }
 

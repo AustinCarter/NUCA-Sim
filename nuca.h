@@ -112,6 +112,14 @@ enum nuca_search_policy {
   PARTITIONED_MULTICAST
 };
 
+/* cache search policy */
+enum nuca_mapping_policy {
+  SIMPLE,
+  SHARED,
+  FAIR
+};
+
+
 /* block status values */
 #define CACHE_BLK_VALID		0x00000001	/* block in valid, in use */
 #define CACHE_BLK_DIRTY		0x00000002	/* dirty block */
@@ -232,6 +240,7 @@ nuca_cache_create(char *name,		/* name of the cache */
 	     int assoc,			/* associativity of cache */
 	     enum nuca_cache_policy policy,	/* replacement policy w/in sets */
        enum nuca_search_policy search_policy,	/* replacement policy w/in sets */
+       enum nuca_mapping_policy mapping_policy,	/* replacement policy w/in sets */
 	     /* block access function, see description w/in struct cache def */
 	     unsigned int (*blk_access_fn)(enum mem_cmd cmd,
 					   md_addr_t baddr, int bsize,
@@ -247,6 +256,9 @@ nuca_cache_char2policy(char c);		/* replacement policy as a char */
 
 enum nuca_search_policy			/* search policy enum */
 nuca_search_char2policy(char c);		/* search policy as a char */
+
+enum nuca_mapping_policy			/* mapping policy enum */
+nuca_mapping_char2policy(char c);		/* search policy as a char */
 
 /* print cache configuration */
 void

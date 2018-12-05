@@ -763,7 +763,7 @@ sim_reg_options(struct opt_odb_t *odb)
 
   opt_reg_string(odb, "-cache:dl2",
 		 "l2 data cache config, i.e., {<config>|none}",
-		 &cache_dl2_opt, "ul2:64:64:4:16:2:z:i",
+		 &cache_dl2_opt, "ul2:64:64:4:16:2:s:z:i",
 		 /* print */TRUE, NULL);
 
   opt_reg_int(odb, "-cache:dl2lat",
@@ -880,7 +880,7 @@ void
 sim_check_options(struct opt_odb_t *odb,        /* options database */
 		  int argc, char **argv)        /* command line arguments */
 {
-  char name[128], c, d;// c is replacement policy, d is search policy
+  char name[128], c, d, m;// c is replacement policy, d is search policy, m is mapping policy
   int nsets, bsize, assoc, nbanks, hit_count;
 
   if (fastfwd_count < 0 || fastfwd_count >= 2147483647)
@@ -1025,15 +1025,15 @@ sim_check_options(struct opt_odb_t *odb,        /* options database */
       else
 	{
 
-	  if (sscanf(cache_dl2_opt, "%[^:]:%d:%d:%d:%d:%d:%c:%c",
-		     name, &nsets, &bsize, &assoc, &nbanks, &hit_count, &c, &d) != 8) //c is replacement policy (o, z), d is search policy (i, m, l, p)
+	  if (sscanf(cache_dl2_opt, "%[^:]:%d:%d:%d:%d:%d:%c:%c:%c",
+		     name, &nsets, &bsize, &assoc, &nbanks, &hit_count, &m, &c, &d) != 9) //c is replacement policy (o, z), d is search policy (i, m, l, p)
       fatal("bad l2 D-cache parms: "
 		  "<name>:<nsets>:<bsize>:<assoc>:<repl>");
       debug("nbanks: %d", nbanks);
       debug("name: %s", name);
 
 	  cache_dl2 = nuca_cache_create(name, nsets, bsize, /* balloc */FALSE,
-				   /* usize */0, assoc, nuca_cache_char2policy(c), nuca_search_char2policy(d),
+				   /* usize */0, assoc, nuca_cache_char2policy(c), nuca_search_char2policy(d), nuca_mapping_char2policy(m),
 				   dl2_access_fn, /* hit lat */cache_dl2_lat, nbanks /*nbanks*/, hit_count);
 	}
     }
