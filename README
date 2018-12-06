@@ -135,3 +135,30 @@ Best Regards,
 Todd Austin
 SimpleScalar LLC
 info@simplescalar.com
+
+-cache:dl2 ul2:64:64:4:16:2:s:o:l
+name:sets:block size:assoc:nbanks:hit_count:mapping:replacement:search
+mapping:
+s = simple
+f = fair
+
+replacement:
+z = zero-copy
+o = one-copy
+
+search:
+i = incremental
+m = multicast
+l = limited multicast -> how many banks should you search by default
+
+2^6 sets
+2^6 blocks
+2^4 banks
+2^16 cache size = 64 KB
+
+-cache:dl2       ul2:1024:64:4:l # l2 data cache config, i.e., {<config>|none}
+2^10 sets
+2^6 block size
+2^2 assoc
+
+2^18 cache size = 256 KB
