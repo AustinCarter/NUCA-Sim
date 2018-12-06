@@ -1028,7 +1028,7 @@ sim_check_options(struct opt_odb_t *odb,        /* options database */
 	    fatal("bad l2 D-cache parms: "
 		  "<name>:<nsets>:<bsize>:<assoc>:<repl>");
 	  cache_dl2 = cache_create(name, nsets, bsize, /* balloc */FALSE,
-				   /* usize */0, assoc, nuca_cache_char2policy(c),
+				   /* usize */0, assoc, cache_char2policy(c),
 				   dl2_access_fn, /* hit lat */cache_dl2_lat);
 	}
     }
