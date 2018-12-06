@@ -278,8 +278,8 @@ nuca_cache_create(char *name,		/* name of the cache */
   debug("%s: bsize     = %d", cp->name, bsize);
   debug("%s: nsets     = %d", cp->name, nsets);
   debug("%s: nbanks    = %d", cp->name, nbanks);
-  debug("%s: usize    = %d", cp->name, assoc*bsize*nsets);
-  debug("%s: usize-log    = %d", cp->name, log_base2(assoc*bsize*nsets));
+  debug("%s: usize    = %d", cp->name, nbanks*bsize*nsets);
+  debug("%s: usize-log    = %d", cp->name, log_base2(nbanks*bsize*nsets));
 
 
   /* compute derived parameters */
@@ -338,7 +338,7 @@ nuca_cache_create(char *name,		/* name of the cache */
   sprintf(filepath, "%sbanks_%s_%d.txt", path, 
           (mapping_policy == SIMPLE ? "simple" : mapping_policy == SHARED ? "shared" 
           : mapping_policy == FAIR ? "fair" : (abort(), "")), 
-          log_base2(assoc*bsize*nsets));
+          log_base2(nbanks*bsize*nsets));
   debug ("filepath: %s\n",filepath);
   bank_org_file = fopen(filepath, "r");
   if (bank_org_file == NULL){
