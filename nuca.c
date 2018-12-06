@@ -706,10 +706,13 @@ int cache_hit(struct nuca_cache_t *cp, struct nuca_cache_bank_t *banks, int wayN
         case LIMITED_MULTICAST:
           if (wayNumber > 1){ //TODO 1 is arbitrary, could be any n < assoc
             int w = 0;
-            access_time = banks[wayNumber].access_time;
-            for (w = 0; w <= 1; w++){
+            access_time = banks[1].access_time;
+            for (w = 2; w <= wayNumber; w++){
               access_time += banks[w].access_time;
             }
+          }
+          else{
+            access_time = banks[wayNumber].access_time;
           }
           break;
         case PARTITIONED_MULTICAST:
